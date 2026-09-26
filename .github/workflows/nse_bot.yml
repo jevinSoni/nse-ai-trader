@@ -1,0 +1,41 @@
+name: NSE Autonomous Cloud Bot
+
+on:
+  schedule:
+    # Runs every 15 minutes during Indian Market Hours (Mon-Fri, 9:00 AM to 3:45 PM IST)
+    - cron: '*/15 3-10 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run NSE Trading Bot
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python cloud_bot.py --force
+          else
+            python cloud_bot.py
+          fi
+
+      - name: Save database back to GitHub
+        run: |
+          git config --global user.name "NSE Auto-Bot"
+          git config --global user.email "bot@noreply.github.com"
+          git add paper_trades.db
+          git diff --staged --quiet || git commit -m "Auto-update paper_trades.db"
+          git push
