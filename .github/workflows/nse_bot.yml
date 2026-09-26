@@ -2,7 +2,7 @@ name: NSE Autonomous Cloud Bot
 
 on:
   schedule:
-    # Runs every 15 minutes during Indian Market Hours (Mon-Fri, 9:00 AM to 3:45 PM IST)
+    # Runs every 15 mins during Indian Market Hours (Mon-Fri, 9:00 AM to 3:45 PM IST -> 03:30 to 10:15 UTC)
     - cron: '*/15 3-10 * * 1-5'
   workflow_dispatch:
 
@@ -25,6 +25,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run NSE Trading Bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python cloud_bot.py --force
