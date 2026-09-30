@@ -99,82 +99,102 @@ with tab1:
         st.info("No closed trades recorded yet. Once positions hit target or stop-loss, realized equity curves will appear here.")
 
 # TAB 2: LIVE POSITIONS & VETOES WITH LIVE P&L
+# TAB 2: LIVE POSITIONS & VETOES WITH AUTO-REFRESH EVERY 15 SECONDS
 with tab2:
     st.subheader("🤖 Active Open Positions (Live Market Valuation)")
-    
-    if not open_trades.empty:
-        # Fetch current live price (LTP) for each open position
-        unique_symbols = open_trades["symbol"].unique().tolist()
-        live_prices = {}
-        for sym in unique_symbols:
-            try:
-                hist = yf.Ticker(sym).history(period="2d", interval="15m")
-                if not hist.empty:
-                    live_prices[sym] = round(float(hist["Close"].iloc[-1]), 2)
-            except Exception:
-                pass
 
-        # Calculate live price, unrealized P&L, and Return %
-        ltp_list, pnl_rupees_list, return_pct_list, invested_val_list = [], [], [], []
-        
-        for _, row in open_trades.iterrows():
-            sym = row["symbol"]
-            entry_p = float(row["entry_price"])
-            qty = int(row["quantity"])
-            direction = row["direction"].upper()
-            ltp = live_prices.get(sym, entry_p)
+    # Isolated fragment that auto-runs every 15 seconds
+    @st.fragment(run_every=10)
+    def render_live_positions():
+        # Re-query open trades so newly executed bot trades appear immediately
+        conn = sqlite3.connect(DB_FILE)
+        current_open_trades = pd.read_sql_query("SELECT * FROM strategy_trades WHERE status = 'OPEN'", conn)
+        conn.close()
 
-            if direction == "BUY":
-                pnl = (ltp - entry_p) * qty
-                ret = ((ltp - entry_p) / entry_p) * 100.0
-            else:  # SELL / Short
-                pnl = (entry_p - ltp) * qty
-                ret = ((entry_p - ltp) / entry_p) * 100.0
+        col_t1, col_t2 = st.columns([3, 1])
+        with col_t1:
+            st.caption("⚡ Live auto-updating every 15 seconds via Yahoo Finance feed.")
+        with col_t2:
+            if st.button("🔄 Force Refresh Now", use_container_width=True):
+                st.rerun()
 
-            ltp_list.append(ltp)
-            pnl_rupees_list.append(round(pnl, 2))
-            return_pct_list.append(round(ret, 2))
-            invested_val_list.append(round(entry_p * qty, 2))
+        if not current_open_trades.empty:
+            unique_symbols = current_open_trades["symbol"].unique().tolist()
+            live_prices = {}
+            for sym in unique_symbols:
+                try:
+                    # 1d/1m fetch ensures the freshest possible intraday quote
+                    hist = yf.Ticker(sym).history(period="1d", interval="1m")
+                    if not hist.empty:
+                        live_prices[sym] = round(float(hist["Close"].iloc[-1]), 2)
+                    else:
+                        # Fallback to 15m candle if 1m is throttled
+                        hist15 = yf.Ticker(sym).history(period="2d", interval="15m")
+                        if not hist15.empty:
+                            live_prices[sym] = round(float(hist15["Close"].iloc[-1]), 2)
+                except Exception:
+                    pass
 
-        open_trades["Current Price (₹)"] = ltp_list
-        open_trades["Invested (₹)"] = invested_val_list
-        open_trades["Unrealized P&L (₹)"] = pnl_rupees_list
-        open_trades["Return %"] = return_pct_list
+            ltp_list, pnl_rupees_list, return_pct_list, invested_val_list = [], [], [], []
+            for _, row in current_open_trades.iterrows():
+                sym = row["symbol"]
+                entry_p = float(row["entry_price"])
+                qty = int(row["quantity"])
+                direction = str(row["direction"]).upper()
+                ltp = live_prices.get(sym, entry_p)
 
-        # Top summary KPI metric cards
-        total_open = len(open_trades)
-        total_invested = sum(invested_val_list)
-        total_unrealized_pnl = round(sum(pnl_rupees_list), 2)
-        total_return_pct = round((total_unrealized_pnl / total_invested) * 100.0, 2) if total_invested > 0 else 0.0
+                if direction == "BUY":
+                    pnl = (ltp - entry_p) * qty
+                    ret = ((ltp - entry_p) / entry_p) * 100.0
+                else:
+                    pnl = (entry_p - ltp) * qty
+                    ret = ((entry_p - ltp) / entry_p) * 100.0
 
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Open Positions", total_open)
-        p2.metric("Total Invested Capital", f"₹{total_invested:,.2f}")
-        p3.metric("Live Unrealized P&L", f"₹{total_unrealized_pnl:,.2f}", f"{total_return_pct:+.2f}%")
-        
-        quant_unrealized = open_trades[open_trades["strategy"] == "PURE_QUANT"]["Unrealized P&L (₹)"].sum()
-        ai_unrealized = open_trades[open_trades["strategy"] == "AI_HYBRID"]["Unrealized P&L (₹)"].sum()
-        p4.metric("Strategy Split (Quant / AI)", f"₹{quant_unrealized:,.0f} / ₹{ai_unrealized:,.0f}")
+                ltp_list.append(ltp)
+                pnl_rupees_list.append(round(pnl, 2))
+                return_pct_list.append(round(ret, 2))
+                invested_val_list.append(round(entry_p * qty, 2))
 
-        # Display structured table with live metrics
-        display_cols = [
-            "id", "strategy", "symbol", "direction", "entry_price",
-            "Current Price (₹)", "Unrealized P&L (₹)", "Return %",
-            "quantity", "stop_loss", "target", "ai_note", "entry_time"
-        ]
-        
-        # Color styling helper
-        def highlight_pnl(val):
-            color = "#00c853" if val > 0 else ("#d50000" if val < 0 else "gray")
-            return f"color: {color}; font-weight: bold;"
+            current_open_trades["Current Price (₹)"] = ltp_list
+            current_open_trades["Invested (₹)"] = invested_val_list
+            current_open_trades["Unrealized P&L (₹)"] = pnl_rupees_list
+            current_open_trades["Return %"] = return_pct_list
 
-        st.dataframe(
-            open_trades[display_cols].style.map(highlight_pnl, subset=["Unrealized P&L (₹)", "Return %"]),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No active open positions right now.")
+            # Metric KPIs
+            total_open = len(current_open_trades)
+            total_invested = sum(invested_val_list)
+            total_unrealized_pnl = round(sum(pnl_rupees_list), 2)
+            total_return_pct = round((total_unrealized_pnl / total_invested) * 100.0, 2) if total_invested > 0 else 0.0
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Open Positions", total_open)
+            m2.metric("Total Capital Invested", f"₹{total_invested:,.2f}")
+            m3.metric("Live Unrealized P&L", f"₹{total_unrealized_pnl:,.2f}", f"{total_return_pct:+.2f}%")
+            
+            q_unrealized = current_open_trades[current_open_trades["strategy"] == "PURE_QUANT"]["Unrealized P&L (₹)"].sum()
+            a_unrealized = current_open_trades[current_open_trades["strategy"] == "AI_HYBRID"]["Unrealized P&L (₹)"].sum()
+            m4.metric("Quant / AI Split", f"₹{q_unrealized:,.0f} / ₹{a_unrealized:,.0f}")
+
+            # Highlight styling
+            def highlight_pnl(val):
+                color = "#00c853" if val > 0 else ("#d50000" if val < 0 else "gray")
+                return f"color: {color}; font-weight: bold;"
+
+            display_cols = [
+                "id", "strategy", "symbol", "direction", "entry_price",
+                "Current Price (₹)", "Unrealized P&L (₹)", "Return %",
+                "quantity", "stop_loss", "target", "ai_note", "entry_time"
+            ]
+            st.dataframe(
+                current_open_trades[display_cols].style.map(highlight_pnl, subset=["Unrealized P&L (₹)", "Return %"]),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No active open positions right now.")
+
+    # Call the fragment
+    render_live_positions()
 
     st.divider()
     st.subheader("🛡️ Setups Vetoed (Rejected) by Gemini AI")
