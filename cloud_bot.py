@@ -296,4 +296,5 @@ def run_intraday_cycle():
 
 
 if __name__ == "__main__":
+    send_telegram("🧪 <b>Cloud Test Alert:</b> GitHub Actions successfully pinged Telegram!")
   run_intraday_cycle()
