@@ -25,7 +25,7 @@ WATCHLIST = [
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram tokens not found in environment.")
+        print("Telegram tokens not found.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
@@ -49,7 +49,7 @@ def get_db():
     return conn
 
 def get_live_news_summary(symbol):
-    """Agent 1: News Analyst scrapes recent headlines for the ticker."""
+    """Scrapes recent news headlines for the ticker."""
     try:
         ticker = yf.Ticker(symbol)
         news_items = ticker.news
@@ -80,16 +80,18 @@ TECHNICAL DATA:
 RECENT NEWS / CATALYSTS:
 {news_data}
 
-Conduct an aggressive multi-agent debate:
-1. BULL AGENT: Make the case for momentum and buying/shorting with the trend.
-2. BEAR AGENT: Act as Devil's Advocate. Look for bull/bear traps, divergence, overbought/oversold levels, and overhead resistance.
-3. CHIEF RISK OFFICER (CRO): Cut through the bias and issue the final ruling.
+Conduct an explicit multi-agent committee debate:
+1. NEWS ANALYST: Evaluate how recent news impacts this setup.
+2. BULL AGENT: Argue the upside momentum and trend continuation case.
+3. BEAR AGENT: Act as Devil's Advocate (look for fakeouts, trap candles, and resistance).
+4. CHIEF RISK OFFICER (CRO): Give the final corporate ruling.
 
-STRICT INSTRUCTION: Your output MUST follow this exact template:
-[BULL]: <1 sharp punchy sentence>
-[BEAR]: <1 sharp punchy sentence>
+STRICT INSTRUCTION: Your output MUST follow this exact format:
+[NEWS_ANALYSIS]: <1 sentence catalyst review>
+[BULL]: <1 sentence bull argument>
+[BEAR]: <1 sentence bear argument>
 [CRO_DECISION]: <APPROVED or VETOED>
-[CRO_RATIONALE]: <1 clear summary sentence explaining the ruling>
+[CRO_RATIONALE]: <1 sentence final decision reasoning>
 """
     try:
         response = client.models.generate_content(
@@ -165,7 +167,7 @@ def run_intraday_cycle():
         conn.close()
         return
 
-    print(f"⚡ Starting Quant-AI Hybrid Scan at {current_time_str}...")
+    print(f"⚡ Starting AI Boardroom Intraday Scan at {current_time_str}...")
 
     for sym in WATCHLIST:
         try:
@@ -216,17 +218,17 @@ def run_intraday_cycle():
                     INSERT INTO strategy_trades 
                     (strategy, symbol, direction, entry_price, quantity, stop_loss, target, status, entry_time, ai_note)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, ("AI_CRO_MOMENTUM", sym, direction, entry_p, qty, sl, target, "OPEN", current_time_str, debate_transcript))
+                """, ("AI_BOARDROOM_STRATEGY", sym, direction, entry_p, qty, sl, target, "OPEN", current_time_str, debate_transcript))
                 conn.commit()
 
                 telegram_msg = (
-                    f"🧠 <b>AI-APPROVED INTRADAY TRADE: {sym}</b>\n\n"
-                    f"📈 <b>Action:</b> {direction}\n"
-                    f"💵 <b>Entry:</b> ₹{entry_p}\n"
+                    f"🏛️ <b>AI BOARDROOM APPROVED TRADE</b>\n\n"
+                    f"📌 <b>Symbol:</b> {sym} ({direction})\n"
+                    f"💵 <b>Entry Price:</b> ₹{entry_p}\n"
                     f"🎯 <b>Target:</b> ₹{target} (0.8%)\n"
                     f"🛑 <b>Stop Loss:</b> ₹{sl} (0.4%)\n"
                     f"📦 <b>Size:</b> {qty} shares (~₹{entry_p * qty:,.0f})\n\n"
-                    f"<b>🏛️ AI Boardroom Debate:</b>\n"
+                    f"<b>📋 Complete Committee Transcript:</b>\n"
                     f"<code>{debate_transcript}</code>"
                 )
                 send_telegram(telegram_msg)
@@ -238,4 +240,5 @@ def run_intraday_cycle():
     conn.close()
 
 if __name__ == "__main__":
+    send_telegram("🧪 <b>Cloud Test Alert:</b> Focused AI Boardroom Strategy Bot Active!")
     run_intraday_cycle()
