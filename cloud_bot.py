@@ -76,7 +76,7 @@ Evaluate and follow this exact format:
 [CRO_RATIONALE]: <1 sentence final decision reasoning>
 """
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
         text = response.text.strip()
         is_approved = "[CRO_DECISION]: APPROVED" in text.upper()
         return is_approved, text
