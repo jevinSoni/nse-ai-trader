@@ -14,10 +14,12 @@ DB_FILE = "paper_trades.db"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+# Expanded universe of top liquid NSE momentum movers
 WATCHLIST = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
     "SBIN.NS", "INFY.NS", "ITC.NS", "LT.NS", "BAJFINANCE.NS", "HAL.NS",
-    "TRENT.NS", "TATAMOTORS.NS", "M&M.NS"
+    "TRENT.NS", "TATAMOTORS.NS", "M&M.NS", "AXISBANK.NS", "KOTAKBANK.NS",
+    "SUNPHARMA.NS", "MARUTI.NS", "NTPC.NS", "ONGC.NS"
 ]
 
 def send_telegram(message):
@@ -61,16 +63,17 @@ def run_ai_boardroom_debate(symbol, direction, entry_p, df_context):
     news_data = get_live_news_summary(symbol)
     prompt = f"""
 You are the Investment Committee of an intraday quant desk.
-Technical breakout triggered:
+Technical setup triggered:
 TICKER: {symbol} | DIRECTION: {direction} | ENTRY: ₹{entry_p}
 TECHNICALS: {df_context}
 NEWS: {news_data}
 
 Evaluate and follow this exact format:
-[BULL]: <1 sentence>
-[BEAR]: <1 sentence>
+[NEWS_ANALYSIS]: <1 sentence catalyst review>
+[BULL]: <1 sentence bull argument>
+[BEAR]: <1 sentence bear argument>
 [CRO_DECISION]: <APPROVED or VETOED>
-[CRO_RATIONALE]: <1 sentence>
+[CRO_RATIONALE]: <1 sentence final decision reasoning>
 """
     try:
         response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
@@ -117,7 +120,7 @@ def run_intraday_cycle():
     current_hhmm = now_ist.strftime("%H:%M")
 
     print(f"\n=======================================================")
-    print(f"🕒 INTRADAY SCAN CYCLE STARTED AT: {current_time_str}")
+    print(f"🕒 INTRADAY SCAN CYCLE: {current_time_str}")
     print(f"=======================================================")
 
     conn = get_db()
@@ -125,7 +128,7 @@ def run_intraday_cycle():
     audit_open_positions(conn, current_time_str, current_hhmm >= "15:15")
 
     if current_hhmm < "09:30" or current_hhmm > "14:45":
-        print(f"⚠️ Scan skipped. Outside trading hours (09:30 - 14:45 IST). Current time: {current_hhmm}")
+        print(f"⚠️ Scan skipped. Outside trading hours (09:30 - 14:45 IST). Current: {current_hhmm}")
         conn.close()
         return
 
@@ -135,30 +138,36 @@ def run_intraday_cycle():
         try:
             c.execute("SELECT id FROM strategy_trades WHERE symbol = ? AND status = 'OPEN'", (sym,))
             if c.fetchone():
-                print(f"⏳ [{sym}] Position already open. Skipping.")
                 continue
 
             df = yf.Ticker(sym).history(period="5d", interval="15m")
-            if len(df) < 30:
-                print(f"⚠️ [{sym}] Insufficient candle data ({len(df)} bars).")
+            if len(df) < 35:
                 continue
 
             df['EMA10'] = df['Close'].ewm(span=10, adjust=False).mean()
             df['EMA30'] = df['Close'].ewm(span=30, adjust=False).mean()
             df['Vol_Avg'] = df['Volume'].rolling(20).mean()
 
-            c_bar, p_bar = df.iloc[-1], df.iloc[-2]
-            bull_cross = p_bar['EMA10'] <= p_bar['EMA30'] and c_bar['EMA10'] > c_bar['EMA30']
-            bear_cross = p_bar['EMA10'] >= p_bar['EMA30'] and c_bar['EMA10'] < c_bar['EMA30']
-            vol_ratio = c_bar['Volume'] / c_bar['Vol_Avg'] if c_bar['Vol_Avg'] > 0 else 0
-            vol_spike = vol_ratio >= 1.3
+            # Use df.iloc[-2] as the LAST COMPLETED 15m candle to avoid partial-candle volume distortion
+            completed_bar = df.iloc[-2]
+            prev_bar = df.iloc[-3]
+            live_bar = df.iloc[-1]
 
-            print(f"🔍 [{sym:14}] Close: ₹{c_bar['Close']:<8.2f} | 10EMA: {c_bar['EMA10']:<8.2f} | 30EMA: {c_bar['EMA30']:<8.2f} | Vol Spike: {vol_ratio:.2f}x")
+            vol_ratio = completed_bar['Volume'] / completed_bar['Vol_Avg'] if completed_bar['Vol_Avg'] > 0 else 0
+            
+            # Setup criteria:
+            # 1. EMA10 trending above EMA30 (Bullish) or below (Bearish)
+            # 2. Volume on completed bar >= 1.1x average (healthy volume)
+            # 3. Momentum breakout: candle closes higher than previous high (BUY) or lower than previous low (SELL)
+            bullish_momentum = (completed_bar['EMA10'] > completed_bar['EMA30']) and (completed_bar['Close'] > prev_bar['High']) and (vol_ratio >= 1.1)
+            bearish_momentum = (completed_bar['EMA10'] < completed_bar['EMA30']) and (completed_bar['Close'] < prev_bar['Low']) and (vol_ratio >= 1.1)
 
-            if vol_spike and (bull_cross or bear_cross):
+            print(f"🔍 [{sym:14}] Close: ₹{live_bar['Close']:<8.2f} | 10EMA: {completed_bar['EMA10']:<8.2f} | 30EMA: {completed_bar['EMA30']:<8.2f} | Vol: {vol_ratio:.2f}x")
+
+            if bullish_momentum or bearish_momentum:
                 triggered_count += 1
-                direction = "BUY" if bull_cross else "SELL"
-                entry_p = round(float(c_bar['Close']), 2)
+                direction = "BUY" if bullish_momentum else "SELL"
+                entry_p = round(float(live_bar['Close']), 2)
                 target = round(entry_p * 1.008, 2) if direction == "BUY" else round(entry_p * 0.992, 2)
                 sl = round(entry_p * 0.996, 2) if direction == "BUY" else round(entry_p * 1.004, 2)
                 qty = max(1, int(25000 / entry_p))
@@ -167,14 +176,12 @@ def run_intraday_cycle():
                 c.execute("""
                     INSERT INTO strategy_trades (strategy, symbol, direction, entry_price, quantity, stop_loss, target, status, entry_time, ai_note)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, ("PURE_QUANT", sym, direction, entry_p, qty, sl, target, "OPEN", current_time_str, "Math-only trigger"))
+                """, ("PURE_QUANT", sym, direction, entry_p, qty, sl, target, "OPEN", current_time_str, "Math momentum trigger"))
 
                 # 2. Run AI Boardroom Debate
-                print(f"\n🔥 Setup triggered on {sym}! Convening AI Committee...")
-                df_context = f"Price: ₹{entry_p}, Vol: {c_bar['Volume']:,} ({vol_ratio:.1f}x avg), EMA10: {c_bar['EMA10']:.2f}, EMA30: {c_bar['EMA30']:.2f}"
+                print(f"🔥 Setup detected on {sym}! Convening AI Committee...")
+                df_context = f"Live Price: ₹{entry_p}, Completed Bar Volume: {completed_bar['Volume']:,} ({vol_ratio:.1f}x avg), 10EMA: ₹{completed_bar['EMA10']:.2f}, 30EMA: ₹{completed_bar['EMA30']:.2f}"
                 approved, debate = run_ai_boardroom_debate(sym, direction, entry_p, df_context)
-
-                print(f"🏛️ Debate Outcome for {sym}:\n{debate}\n")
 
                 if approved:
                     c.execute("""
@@ -186,13 +193,12 @@ def run_intraday_cycle():
                         f"🏛️ <b>AI BOARDROOM APPROVED TRADE (AI_HYBRID)</b>\n\n"
                         f"📌 <b>Symbol:</b> {sym} ({direction})\n"
                         f"💵 <b>Entry:</b> ₹{entry_p}\n"
-                        f"🎯 <b>Target:</b> ₹{target} | 🛑 <b>Stop Loss:</b> ₹{sl}\n\n"
+                        f"🎯 <b>Target:</b> ₹{target} (0.8%) | 🛑 <b>Stop Loss:</b> ₹{sl} (0.4%)\n\n"
                         f"<b>📋 Committee Transcript:</b>\n"
                         f"<code>{debate}</code>"
                     )
                     send_telegram(telegram_msg)
                 else:
-                    # Notify on Telegram when AI rejects a setup
                     telegram_msg = (
                         f"🚫 <b>AI BOARDROOM VETOED SETUP</b>\n\n"
                         f"📌 <b>Symbol:</b> {sym} ({direction})\n"
@@ -206,7 +212,7 @@ def run_intraday_cycle():
         except Exception as e:
             print(f"❌ Error on {sym}: {e}")
 
-    print(f"\n🏁 Cycle complete. Setups triggered: {triggered_count}/{len(WATCHLIST)}")
+    print(f"\n🏁 Cycle complete. Setups evaluated: {triggered_count}/{len(WATCHLIST)}")
     print(f"=======================================================\n")
     conn.close()
 
