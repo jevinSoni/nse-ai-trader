@@ -56,6 +56,8 @@ def get_live_news_summary(symbol):
     except Exception:
         return "News feed unavailable."
 
+import time
+
 def run_ai_boardroom_debate(symbol, direction, entry_p, df_context):
     if not client:
         return True, "No Gemini API Key provided."
@@ -75,14 +77,30 @@ Evaluate and follow this exact format:
 [CRO_DECISION]: <APPROVED or VETOED>
 [CRO_RATIONALE]: <1 sentence final decision reasoning>
 """
-    try:
-        response = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
-        text = response.text.strip()
-        is_approved = "[CRO_DECISION]: APPROVED" in text.upper()
-        return is_approved, text
-    except Exception as e:
-        print(f"AI error: {e}")
-        return False, f"Error: {e}"
+
+    # Primary and fallback models to bypass temporary capacity bottlenecks
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+    last_error = ""
+
+    for model_name in candidate_models:
+        for attempt in range(2):  # Retry once with backoff before switching models
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                text = response.text.strip()
+                is_approved = "[CRO_DECISION]: APPROVED" in text.upper()
+                return is_approved, text
+            except Exception as e:
+                last_error = str(e)
+                if "503" in last_error or "429" in last_error or "UNAVAILABLE" in last_error:
+                    time.sleep(2 * (attempt + 1))  # Pause 2s or 4s and retry
+                    continue
+                break  # Non-retryable error, try next model
+
+    print(f"AI Debate failed across all models: {last_error}")
+    return False, f"Committee Unavailable (503 High Demand). Error: {last_error}"
 
 def audit_open_positions(conn, current_time_str, is_eod):
     c = conn.cursor()
