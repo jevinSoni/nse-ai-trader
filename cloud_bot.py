@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from datetime import datetime
 from google import genai
 import pandas as pd
@@ -14,7 +15,7 @@ DB_FILE = "paper_trades.db"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Expanded universe of top liquid NSE momentum movers
+# Universe of top liquid NSE momentum movers
 WATCHLIST = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
     "SBIN.NS", "INFY.NS", "ITC.NS", "LT.NS", "BAJFINANCE.NS", "HAL.NS",
@@ -56,7 +57,26 @@ def get_live_news_summary(symbol):
     except Exception:
         return "News feed unavailable."
 
-import time
+def get_best_available_models():
+    """Dynamically identifies active text-generation models enabled on this API key."""
+    candidates = ["gemini-3.8-flash", "gemini-3-flash-preview", "gemini-3.1-pro-preview"]
+    if not client:
+        return candidates
+    try:
+        live_models = []
+        for m in client.models.list():
+            name = m.name.split("/")[-1] if "/" in m.name else m.name
+            live_models.append(name)
+        # Prioritize matching active 3.x models
+        matched = [m for m in candidates if m in live_models]
+        if matched:
+            return matched
+        # Fallback to any flash or pro model discovered
+        discovered = [m for m in live_models if "flash" in m.lower() or "pro" in m.lower()]
+        return discovered if discovered else candidates
+    except Exception as e:
+        print(f"Could not list dynamic models ({e}). Using standard defaults.")
+        return candidates
 
 def run_ai_boardroom_debate(symbol, direction, entry_p, df_context):
     if not client:
@@ -78,12 +98,11 @@ Evaluate and follow this exact format:
 [CRO_RATIONALE]: <1 sentence final decision reasoning>
 """
 
-    # Primary and fallback models to bypass temporary capacity bottlenecks
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+    active_models = get_best_available_models()
     last_error = ""
 
-    for model_name in candidate_models:
-        for attempt in range(2):  # Retry once with backoff before switching models
+    for model_name in active_models:
+        for attempt in range(2):
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -94,13 +113,15 @@ Evaluate and follow this exact format:
                 return is_approved, text
             except Exception as e:
                 last_error = str(e)
-                if "503" in last_error or "429" in last_error or "UNAVAILABLE" in last_error:
-                    time.sleep(2 * (attempt + 1))  # Pause 2s or 4s and retry
+                # Retry with backoff if experiencing transient load/rate limits
+                if any(err_code in last_error for err_code in ["503", "429", "UNAVAILABLE"]):
+                    time.sleep(2 * (attempt + 1))
                     continue
-                break  # Non-retryable error, try next model
+                # If 404 or unsupported, move directly to next candidate model
+                break
 
-    print(f"AI Debate failed across all models: {last_error}")
-    return False, f"Committee Unavailable (503 High Demand). Error: {last_error}"
+    print(f"AI Debate failed across models: {last_error}")
+    return False, f"AI Committee Temporary Service Error: {last_error}"
 
 def audit_open_positions(conn, current_time_str, is_eod):
     c = conn.cursor()
@@ -166,17 +187,13 @@ def run_intraday_cycle():
             df['EMA30'] = df['Close'].ewm(span=30, adjust=False).mean()
             df['Vol_Avg'] = df['Volume'].rolling(20).mean()
 
-            # Use df.iloc[-2] as the LAST COMPLETED 15m candle to avoid partial-candle volume distortion
+            # Inspect last completed candle (df.iloc[-2]) to avoid partial-candle volume traps
             completed_bar = df.iloc[-2]
             prev_bar = df.iloc[-3]
             live_bar = df.iloc[-1]
 
             vol_ratio = completed_bar['Volume'] / completed_bar['Vol_Avg'] if completed_bar['Vol_Avg'] > 0 else 0
             
-            # Setup criteria:
-            # 1. EMA10 trending above EMA30 (Bullish) or below (Bearish)
-            # 2. Volume on completed bar >= 1.1x average (healthy volume)
-            # 3. Momentum breakout: candle closes higher than previous high (BUY) or lower than previous low (SELL)
             bullish_momentum = (completed_bar['EMA10'] > completed_bar['EMA30']) and (completed_bar['Close'] > prev_bar['High']) and (vol_ratio >= 1.1)
             bearish_momentum = (completed_bar['EMA10'] < completed_bar['EMA30']) and (completed_bar['Close'] < prev_bar['Low']) and (vol_ratio >= 1.1)
 
